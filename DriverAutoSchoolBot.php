@@ -193,40 +193,60 @@ if (isset($update['message'])) {
     }
 
     // /start з кодом
-    if (strpos($text, '/start') === 0) {
-        $args = preg_split('/\s+/', $text, 2);
-        $code = trim($args[1] ?? '');
-        $code = preg_replace('/\s+/', '', $code);
+   // ───────────────────────────────────────────────
+// /start з кодом запрошення
+// ───────────────────────────────────────────────
+// ───────────────────────────────────────────────
+// /start з кодом
+// ───────────────────────────────────────────────
+if (strpos($text, '/start') === 0) {
+    $args = preg_split('/\s+/', $text, 2);
+    $code_raw = trim($args[1] ?? '');
+    $code = preg_replace('/\s+/', '', $code_raw);          // прибираємо пробіли
+    $code_normalized = strtoupper($code);                  // приводимо до ВЕРХНЬОГО регістру
 
-        if (empty($code)) {
-            send_message($chat_id, "👋 Вітаю!\n⛔ Вхід тільки за одноразовим посиланням від куратора.");
-            exit;
-        }
+    // Дебаг-логування
+    file_put_contents(__DIR__ . '/debug_start.log', date('Y-m-d H:i:s') . " | chat_id: $chat_id | raw: '$code_raw' | clean: '$code' | upper: '$code_normalized' | length: " . strlen($code) . "\n", FILE_APPEND);
+    file_put_contents(__DIR__ . '/debug_start.log', "Current invite_codes: " . json_encode($invite_codes, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n\n", FILE_APPEND);
 
-        if (!isset($invite_codes[$code]) || $invite_codes[$code] !== null) {
-            send_message($chat_id, "⛔ Посилання недійсне або вже використано.\nОтриманий код: `$code`");
-            exit;
-        }
-
-        $invite_codes[$code] = $chat_id;
-        $user_access_time[$chat_id] = time();
-        save_data();
-        send_message($chat_id, "✅ Доступ активовано на 3 місяці!\nОбери розділ 👇", get_main_keyboard());
+    if (empty($code)) {
+        send_message($chat_id, "👋 Вітаю!\n⛔ Вхід тільки за одноразовим посиланням від куратора.");
         exit;
     }
 
-    if ($text === '/menu' || $text === '/help') {
-        if (is_access_valid($chat_id)) {
-            send_message($chat_id, "👇 Головне меню", get_main_keyboard());
+    // Перевірка з нормалізованим ключем
+    $found = false;
+    $original_code = null;
+    foreach ($invite_codes as $key => $value) {
+        if (strtoupper($key) === $code_normalized) {
+            $found = true;
+            $original_code = $key;
+            break;
         }
+    }
+
+    if (!$found || $invite_codes[$original_code] !== null) {
+        $status = $found ? ($invite_codes[$original_code] === null ? 'null' : 'використано (ID: ' . $invite_codes[$original_code] . ')') : 'не знайдено';
+        $debug_info = "⛔ Посилання недійсне або вже використано.\n\n" .
+                      "Отримано код: '$code'\n" .
+                      "Нормалізований: '$code_normalized'\n" .
+                      "Статус: $status\n" .
+                      "Всього кодів: " . count($invite_codes) . "\n" .
+                      "Список кодів: " . implode(", ", array_keys($invite_codes));
+        send_message($chat_id, $debug_info);
         exit;
     }
 
-    if (!is_access_valid($chat_id)) {
-        send_message($chat_id, "⛔ Твій доступ закінчився.\nЗвернись до куратора за новим посиланням 🔗");
-        exit;
-    }
+    // Активація (використовуємо оригінальний ключ!)
+    $invite_codes[$original_code] = $chat_id;
+    $user_access_time[$chat_id] = time();
+    save_data();
 
+    file_put_contents(__DIR__ . '/debug_start.log', date('Y-m-d H:i:s') . " | УСПІХ: активовано '$original_code' для $chat_id\n", FILE_APPEND);
+
+    send_message($chat_id, "✅ Доступ активовано на 3 місяці!\nОбери розділ 👇", get_main_keyboard());
+    exit;
+}
     // ──────────────────────────────
     // Блок для куратора / адміна
     // ──────────────────────────────
@@ -247,20 +267,29 @@ if (isset($update['message'])) {
             send_message($chat_id, "📊 Кількість користувачів: $count", get_admin_keyboard());
             exit;
         }
+if ($text == 'Список користувачів') {
+    $list = "Список користувачів:\n\n";
+    if (empty($user_access_time)) {
+        $list .= "Поки немає користувачів.";
+    } else {
+        foreach ($user_access_time as $uid => $info) {
+            $start_time = $info['start'] ?? $info;  // сумісність зі старими даними
+            $days_left  = round(($access_time - (time() - $start_time)) / 86400);
+            $date       = date('d.m.Y H:i', $start_time);
 
-        if ($text == 'Список користувачів') {
-            $list = "Список користувачів:\n\n";
-            if (empty($user_access_time)) {
-                $list .= "Поки немає.";
-            } else {
-                foreach ($user_access_time as $uid => $stime) {
-                    $days_left = round(($access_time - (time() - $stime)) / 86400);
-                    $list .= "🆔 $uid | " . date('d.m.Y H:i', $stime) . " | ≈ $days_left днів\n";
-                }
-            }
-            send_message($chat_id, $list, get_admin_keyboard());
-            exit;
+            $name = trim(($info['first_name'] ?? '') . ' ' . ($info['last_name'] ?? ''));
+            $un   = $info['username'] ?? null;
+            $display = $name ?: ($un ? "@$un" : "Без імені (ID $uid)");
+
+            $list .= "🆔 $uid\n";
+            $list .= "   👤 $display\n";
+            $list .= "   Початок: $date\n";
+            $list .= "   Залишилось ≈ $days_left днів\n\n";
         }
+    }
+    send_message($chat_id, $list, get_admin_keyboard());
+    exit;
+}
 
         if ($text == 'Видалити користувача') {
             $user_states[$chat_id] = 'delete_user';
