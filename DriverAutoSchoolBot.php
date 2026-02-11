@@ -1,24 +1,20 @@
 <?php
 
-// ================== ЗАВАНТАЖЕННЯ .env (без залежностей) ==================
+// ================== ЗАВАНТАЖЕННЯ .env ==================
 $envFile = __DIR__ . '/.env';
 if (file_exists($envFile)) {
     $lines = file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
     foreach ($lines as $line) {
         $line = trim($line);
-        if (empty($line) || strpos($line, '#') === 0) {
-            continue;
-        }
+        if (empty($line) || strpos($line, '#') === 0) continue;
         list($name, $value) = explode('=', $line, 2);
-        $name  = trim($name);
-        $value = trim($value);
-        putenv("$name=$value");
+        putenv(trim($name) . '=' . trim($value));
     }
 }
 
 $token = getenv('BOT_TOKEN');
 if (!$token) {
-    die("⚠️ Не знайдено BOT_TOKEN! Перевірте .env файл або змінні оточення.");
+    die("⚠️ Не знайдено BOT_TOKEN!");
 }
 
 // ================== НАСТРОЙКИ ==================
@@ -43,7 +39,7 @@ function load_data() {
             $user_states       = $data['user_states']       ?? [];
             $curator_reply_to  = $data['curator_reply_to']  ?? [];
         } catch (Exception $e) {
-            error_log("Помилка завантаження даних: " . $e->getMessage());
+            error_log("Помилка завантаження: " . $e->getMessage());
         }
     }
 }
@@ -59,13 +55,13 @@ function save_data() {
         ];
         file_put_contents($data_file, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
     } catch (Exception $e) {
-        error_log("Помилка збереження даних: " . $e->getMessage());
+        error_log("Помилка збереження: " . $e->getMessage());
     }
 }
 
 load_data();
 
-// ================== ФУНКЦІЇ ДЛЯ TELEGRAM API ==================
+// ================== ФУНКЦІЇ API ==================
 function send_message($chat_id, $text, $reply_markup = null, $parse_mode = null) {
     global $token;
     $url = "https://api.telegram.org/bot$token/sendMessage";
@@ -78,29 +74,27 @@ function send_message($chat_id, $text, $reply_markup = null, $parse_mode = null)
         CURLOPT_POST            => true,
         CURLOPT_POSTFIELDS      => $post,
         CURLOPT_RETURNTRANSFER  => true,
+        CURLOPT_TIMEOUT         => 10,
     ]);
-    curl_exec($ch);
+    $result = curl_exec($ch);
     curl_close($ch);
+    return json_decode($result, true);
 }
 
 function forward_message($chat_id, $from_chat_id, $message_id) {
     global $token;
     $url = "https://api.telegram.org/bot$token/forwardMessage";
-    $post = [
-        'chat_id'     => $chat_id,
-        'from_chat_id' => $from_chat_id,
-        'message_id'  => $message_id,
-    ];
+    $post = compact('chat_id', 'from_chat_id', 'message_id');
     $ch = curl_init($url);
     curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $post, CURLOPT_RETURNTRANSFER => true]);
     curl_exec($ch);
     curl_close($ch);
 }
 
-function answer_callback_query($callback_query_id, $text) {
+function answer_callback_query($id, $text) {
     global $token;
     $url = "https://api.telegram.org/bot$token/answerCallbackQuery";
-    $post = ['callback_query_id' => $callback_query_id, 'text' => $text];
+    $post = ['callback_query_id' => $id, 'text' => $text];
     $ch = curl_init($url);
     curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $post, CURLOPT_RETURNTRANSFER => true]);
     curl_exec($ch);
@@ -114,15 +108,18 @@ function get_main_keyboard() {
             [['text' => 'Урок 1'], ['text' => 'Урок 2'], ['text' => 'Урок 3']],
             [['text' => 'Урок 4'], ['text' => 'Урок 5'], ['text' => 'Урок 6']],
             [['text' => 'Урок 7'], ['text' => 'Урок 8'], ['text' => 'Урок 9']],
-            [['text' => 'Бонуси 🎁'], ['text' => 'Книга 📕'], ['text' => 'Куратор ➡️']],
+            [['text' => 'Бонуси 🎁'], ['text' => 'Книга 📕'], ['text' => 'Куратор ➡️']]
         ],
         'resize_keyboard' => true,
+        'row_width' => 3
     ];
 }
 
 function get_curator_keyboard($user_id) {
     return [
-        'inline_keyboard' => [[['text' => "Відповісти учню 📩 (ID: $user_id)", 'callback_data' => "reply_$user_id"]]],
+        'inline_keyboard' => [
+            [['text' => "Відповісти учню 📩 (ID: $user_id)", 'callback_data' => "reply_$user_id"]]
+        ]
     ];
 }
 
@@ -131,9 +128,10 @@ function get_admin_keyboard() {
         'keyboard' => [
             [['text' => 'Генерувати посилання'], ['text' => 'Кількість користувачів'], ['text' => 'Список користувачів']],
             [['text' => 'Видалити користувача']],
-            [['text' => 'Головне меню']],
+            [['text' => 'Головне меню']]
         ],
         'resize_keyboard' => true,
+        'row_width' => 3
     ];
 }
 
@@ -141,7 +139,7 @@ function get_admin_keyboard() {
 function is_access_valid($chat_id) {
     global $curator_id, $user_access_time, $access_time;
     if ($chat_id == $curator_id) return true;
-    $start = $user_access_time[$chat_id] ?? 0;
+    $start = $user_access_time[$chat_id]['start'] ?? $user_access_time[$chat_id] ?? 0;
     return $start && (time() - $start <= $access_time);
 }
 
@@ -178,7 +176,7 @@ if (isset($update['message'])) {
         exit;
     }
 
-    // /newlink (для сумісності)
+    // /newlink
     if ($text === '/newlink') {
         if ($from_id != $curator_id) {
             send_message($chat_id, "⛔ Доступ заборонено");
@@ -193,66 +191,99 @@ if (isset($update['message'])) {
     }
 
     // /start з кодом
-   // ───────────────────────────────────────────────
-// /start з кодом запрошення
-// ───────────────────────────────────────────────
-// ───────────────────────────────────────────────
-// /start з кодом
-// ───────────────────────────────────────────────
-if (strpos($text, '/start') === 0) {
-    $args = preg_split('/\s+/', $text, 2);
-    $code_raw = trim($args[1] ?? '');
-    $code = preg_replace('/\s+/', '', $code_raw);          // прибираємо пробіли
-    $code_normalized = strtoupper($code);                  // приводимо до ВЕРХНЬОГО регістру
+    if (strpos($text, '/start') === 0) {
+        $args = preg_split('/\s+/', $text, 2);
+        $code_raw = trim($args[1] ?? '');
+        $code = preg_replace('/\s+/', '', $code_raw);
+        $code_normalized = strtoupper($code);
 
-    // Дебаг-логування
-    file_put_contents(__DIR__ . '/debug_start.log', date('Y-m-d H:i:s') . " | chat_id: $chat_id | raw: '$code_raw' | clean: '$code' | upper: '$code_normalized' | length: " . strlen($code) . "\n", FILE_APPEND);
-    file_put_contents(__DIR__ . '/debug_start.log', "Current invite_codes: " . json_encode($invite_codes, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n\n", FILE_APPEND);
+        file_put_contents(__DIR__ . '/debug_start.log', date('Y-m-d H:i:s') . " | chat_id: $chat_id | raw: '$code_raw' | clean: '$code' | upper: '$code_normalized'\n", FILE_APPEND);
+        file_put_contents(__DIR__ . '/debug_start.log', "Current invite_codes: " . json_encode($invite_codes, JSON_PRETTY_PRINT) . "\n\n", FILE_APPEND);
 
-    if (empty($code)) {
-        send_message($chat_id, "👋 Вітаю!\n⛔ Вхід тільки за одноразовим посиланням від куратора.");
-        exit;
-    }
-
-    // Перевірка з нормалізованим ключем
-    $found = false;
-    $original_code = null;
-    foreach ($invite_codes as $key => $value) {
-        if (strtoupper($key) === $code_normalized) {
-            $found = true;
-            $original_code = $key;
-            break;
+        if (empty($code)) {
+            send_message($chat_id, "👋 Вітаю!\n⛔ Вхід тільки за одноразовим посиланням від куратора.");
+            exit;
         }
-    }
 
-    if (!$found || $invite_codes[$original_code] !== null) {
-        $status = $found ? ($invite_codes[$original_code] === null ? 'null' : 'використано (ID: ' . $invite_codes[$original_code] . ')') : 'не знайдено';
-        $debug_info = "⛔ Посилання недійсне або вже використано.\n\n" .
-                      "Отримано код: '$code'\n" .
-                      "Нормалізований: '$code_normalized'\n" .
-                      "Статус: $status\n" .
-                      "Всього кодів: " . count($invite_codes) . "\n" .
-                      "Список кодів: " . implode(", ", array_keys($invite_codes));
-        send_message($chat_id, $debug_info);
+        $found = false;
+        $original_code = null;
+        foreach ($invite_codes as $key => $value) {
+            if (strtoupper($key) === $code_normalized) {
+                $found = true;
+                $original_code = $key;
+                break;
+            }
+        }
+
+        if (!$found || $invite_codes[$original_code] !== null) {
+            $status = $found ? ($invite_codes[$original_code] === null ? 'null' : 'використано (ID: ' . $invite_codes[$original_code] . ')') : 'не знайдено';
+            $debug_info = "⛔ Посилання недійсне або вже використано.\n\n" .
+                          "Отримано код: '$code'\n" .
+                          "Нормалізований: '$code_normalized'\n" .
+                          "Статус: $status\n" .
+                          "Всього кодів: " . count($invite_codes) . "\n" .
+                          "Список кодів: " . implode(", ", array_keys($invite_codes));
+            send_message($chat_id, $debug_info);
+            exit;
+        }
+
+        $invite_codes[$original_code] = $chat_id;
+        $user_access_time[$chat_id] = [
+            'start'     => time(),
+            'first_name'=> $first_name,
+            'last_name' => $last_name,
+            'username'  => $username,
+        ];
+        save_data();
+
+        file_put_contents(__DIR__ . '/debug_start.log', date('Y-m-d H:i:s') . " | УСПІХ: активовано '$original_code' для $chat_id\n", FILE_APPEND);
+
+        send_message($chat_id, "✅ Доступ активовано на 3 місяці!\nОбери розділ 👇", get_main_keyboard());
         exit;
     }
 
-    // Активація (використовуємо оригінальний ключ!)
-    $invite_codes[$original_code] = $chat_id;
-    $user_access_time[$chat_id] = time();
-    save_data();
+    if ($text === '/menu' || $text === '/help') {
+        if (is_access_valid($chat_id)) {
+            send_message($chat_id, "👇 Головне меню", get_main_keyboard());
+        }
+        exit;
+    }
 
-    file_put_contents(__DIR__ . '/debug_start.log', date('Y-m-d H:i:s') . " | УСПІХ: активовано '$original_code' для $chat_id\n", FILE_APPEND);
+    // Перевірка доступу
+    if (!is_access_valid($chat_id)) {
+        send_message($chat_id, "⛔ Твій доступ закінчився.\nЗвернись до куратора за новим посиланням 🔗");
+        exit;
+    }
 
-    send_message($chat_id, "✅ Доступ активовано на 3 місяці!\nОбери розділ 👇", get_main_keyboard());
-    exit;
-}
-    // ──────────────────────────────
-    // Блок для куратора / адміна
-    // ──────────────────────────────
+    // КРИТИЧНИЙ БЛОК: Куратор відповідає учневі — ПЕРЕД УСІМА ІНШИМИ УМОВАМИ КУРАТОРА
+    if ($chat_id == $curator_id && isset($curator_reply_to[$curator_id])) {
+        $target = $curator_reply_to[$curator_id];
+        $low = mb_strtolower($text);
+
+        if (in_array($low, ['/stop', 'завершити', 'стоп', 'вихід'])) {
+            unset($curator_reply_to[$curator_id]);
+            save_data();
+            send_message($chat_id, "✅ Режим відповіді вимкнено.", get_admin_keyboard());
+            exit;
+        }
+
+        file_put_contents(__DIR__ . '/debug_reply.log', date('Y-m-d H:i:s') . " | Куратор → учню $target: $text\n", FILE_APPEND);
+        $result = send_message($target, "💬 Повідомлення від куратора:\n\n$text");
+
+        file_put_contents(__DIR__ . '/debug_reply.log', date('Y-m-d H:i:s') . " | Результат відправки: " . json_encode($result) . "\n\n", FILE_APPEND);
+
+        if (isset($result['ok']) && !$result['ok']) {
+            $err = $result['description'] ?? 'невідома помилка';
+            send_message($chat_id, "❌ Не вдалося надіслати учневі $target!\nПомилка: $err", get_admin_keyboard());
+        } else {
+            send_message($chat_id, "✅ Надіслано. Пиши далі або /stop", get_curator_keyboard($target));
+        }
+        exit;  // ВИХІД — щоб не йшло далі в "Адмін панель"
+    }
+
+    // Блок куратора (адмін-меню, кнопки тощо)
     if ($chat_id == $curator_id) {
 
-        // Кнопки адмін-меню
         if ($text == 'Генерувати посилання') {
             $code = generate_invite_code();
             $invite_codes[$code] = null;
@@ -267,34 +298,66 @@ if (strpos($text, '/start') === 0) {
             send_message($chat_id, "📊 Кількість користувачів: $count", get_admin_keyboard());
             exit;
         }
-if ($text == 'Список користувачів') {
-    $list = "Список користувачів:\n\n";
-    if (empty($user_access_time)) {
-        $list .= "Поки немає користувачів.";
-    } else {
-        foreach ($user_access_time as $uid => $info) {
-            $start_time = $info['start'] ?? $info;  // сумісність зі старими даними
-            $days_left  = round(($access_time - (time() - $start_time)) / 86400);
-            $date       = date('d.m.Y H:i', $start_time);
 
-            $name = trim(($info['first_name'] ?? '') . ' ' . ($info['last_name'] ?? ''));
-            $un   = $info['username'] ?? null;
-            $display = $name ?: ($un ? "@$un" : "Без імені (ID $uid)");
+        if ($text == 'Список користувачів') {
+            $list = "Список користувачів:\n\n";
+            if (empty($user_access_time)) {
+                $list .= "Поки немає користувачів.";
+            } else {
+                foreach ($user_access_time as $uid => $info) {
+                    $start_time = $info['start'] ?? $info;
+                    $days_left  = round(($access_time - (time() - $start_time)) / 86400);
+                    $date       = date('d.m.Y H:i', $start_time);
 
-            $list .= "🆔 $uid\n";
-            $list .= "   👤 $display\n";
-            $list .= "   Початок: $date\n";
-            $list .= "   Залишилось ≈ $days_left днів\n\n";
+                    $name = trim(($info['first_name'] ?? '') . ' ' . ($info['last_name'] ?? ''));
+                    $un   = $info['username'] ?? null;
+                    $display = $name ?: ($un ? "@$un" : "Без імені (ID $uid)");
+
+                    $list .= "🆔 $uid\n   👤 $display\n   Початок: $date\n   Залишилось ≈ $days_left днів\n\n";
+                }
+            }
+            send_message($chat_id, $list, get_admin_keyboard());
+            exit;
         }
-    }
-    send_message($chat_id, $list, get_admin_keyboard());
-    exit;
-}
 
         if ($text == 'Видалити користувача') {
             $user_states[$chat_id] = 'delete_user';
             save_data();
-            send_message($chat_id, "Введіть ID користувача для видалення:", get_admin_keyboard());
+            send_message($chat_id, "✏️ Введіть ID користувача для видалення:", get_admin_keyboard());
+            exit;
+        }
+
+        // Видалення через команду
+        if (preg_match('/^\/(delete|видалити)\s+(\d+)$/iu', $text, $m)) {
+            $uid = (int)$m[2];
+            if (isset($user_access_time[$uid])) {
+                unset($user_access_time[$uid]);
+                foreach ($invite_codes as $c => &$v) {
+                    if ($v == $uid) $v = null;
+                }
+                save_data();
+                send_message($chat_id, "✅ Користувача $uid видалено з підписки.", get_admin_keyboard());
+            } else {
+                send_message($chat_id, "❌ Користувача $uid не знайдено.", get_admin_keyboard());
+            }
+            exit;
+        }
+
+        // Режим видалення після кнопки "Видалити користувача"
+        if (isset($user_states[$chat_id]) && $user_states[$chat_id] === 'delete_user') {
+            $uid = (int) trim($text);  // видаляємо зайві пробіли
+            if ($uid > 0 && isset($user_access_time[$uid])) {
+                unset($user_access_time[$uid]);
+                foreach ($invite_codes as $c => &$v) {
+                    if ($v == $uid) $v = null;
+                }
+                save_data();
+                send_message($chat_id, "✅ Користувача $uid видалено з підписки.", get_admin_keyboard());
+            } else {
+                send_message($chat_id, "❌ Користувача з ID $uid не знайдено.", get_admin_keyboard());
+            }
+            unset($user_states[$chat_id]);
+            save_data();
             exit;
         }
 
@@ -303,74 +366,39 @@ if ($text == 'Список користувачів') {
             exit;
         }
 
-        // Режим видалення (після натискання кнопки)
-        if (isset($user_states[$chat_id]) && $user_states[$chat_id] === 'delete_user') {
-            $uid = (int) $text;
-            if (isset($user_access_time[$uid])) {
-                unset($user_access_time[$uid]);
-                foreach ($invite_codes as $c => &$v) if ($v == $uid) $v = null;
-                save_data();
-                send_message($chat_id, "✅ Користувача $uid видалено.", get_admin_keyboard());
-            } else {
-                send_message($chat_id, "❌ Користувача $uid не знайдено.", get_admin_keyboard());
-            }
-            unset($user_states[$chat_id]);
-            save_data();
-            exit;
-        }
-
-        // Якщо нічого не підійшло — підказка
-        send_message($chat_id, "Для адмін-панелі використовуйте /admin\nАбо натисніть кнопку.", get_admin_keyboard());
+        // Підказка, якщо нічого не підійшло
+        send_message($chat_id, "👇 Адмін панель", get_admin_keyboard());
         exit;
     }
 
-    // ──────────────────────────────
-    // Звичайний режим учня
-    // ──────────────────────────────
-
+    // Учень натискає "Куратор ➡️"
     if ($text == 'Куратор ➡️') {
         $user_states[$chat_id] = 'support';
         save_data();
-        send_message($chat_id, "💬 Режим спілкування з куратором активовано.\nПиши — надішлю куратору.\nВийти — кнопкою меню.", get_main_keyboard());
+        send_message($chat_id, "💬 Тепер ти в режимі спілкування з куратором.\nПиши повідомлення — вони будуть надіслані.\n\nЩоб вийти — натисни будь-яку кнопку знизу (Урок, Бонуси тощо)", get_main_keyboard());
         exit;
     }
 
-    if (isset($user_states[$chat_id]) && $user_states[$chat_id] === 'support') {
+    // Повідомлення від учня в режимі support
+    if (isset($user_states[$chat_id]) && $user_states[$chat_id] === 'support' && $chat_id != $curator_id) {
         if (preg_match('/^Урок \d+$/', $text) || in_array($text, ['Бонуси 🎁', 'Книга 📕', 'Куратор ➡️'])) {
             unset($user_states[$chat_id]);
             save_data();
         } else {
-            $un = $username ? "@$username" : "(немає)";
-            $fn = trim("$first_name $last_name") ?: "Невідомо";
-            $info = "📩 Від учня:\n👤 $fn  $un\n🆔 $chat_id";
+            $username_str = $username ? "@$username" : "(немає username)";
+            $full_name = trim("$first_name $last_name") ?: "Невідомо";
+            $info_text = "📩 Повідомлення від учня:\n\n👤 $full_name\n$username_str\n🆔 ID: $chat_id";
 
-            send_message($curator_id, $info);
+            send_message($curator_id, $info_text);
             forward_message($curator_id, $chat_id, $message_id);
-            send_message($curator_id, "Відповісти 👇", get_curator_keyboard($chat_id));
+            send_message($curator_id, "📝 Натисни кнопку, щоб відповісти 👇", get_curator_keyboard($chat_id));
 
-            send_message($chat_id, "✅ Надіслано куратору!");
+            send_message($chat_id, "✅ Повідомлення надіслано куратору!\nПиши далі або вийди в меню кнопкою знизу.");
             exit;
         }
     }
 
-    // Відповідь куратора учневі
-    if ($chat_id == $curator_id && isset($curator_reply_to[$curator_id])) {
-        $target = $curator_reply_to[$curator_id];
-        $low = mb_strtolower($text);
-
-        if (in_array($low, ['/stop', 'завершити', 'стоп', 'вихід'])) {
-            unset($curator_reply_to[$curator_id]);
-            save_data();
-            send_message($chat_id, "Режим відповіді вимкнено.", get_admin_keyboard());
-            exit;
-        }
-
-        send_message($target, "💬 Від куратора:\n\n$text");
-        send_message($chat_id, "✅ Надіслано. Продовжуй або /stop", get_curator_keyboard($target));
-        exit;
-    }
-
-    // Вихід з support при виборі меню
+    // Вихід з support
     if (isset($user_states[$chat_id]) && $user_states[$chat_id] === 'support' &&
         (preg_match('/^Урок \d+$/', $text) || in_array($text, ['Бонуси 🎁', 'Книга 📕']))) {
         unset($user_states[$chat_id]);
@@ -379,36 +407,39 @@ if ($text == 'Список користувачів') {
 
     // Звичайне меню учня
     if (preg_match('/^Урок \d+$/', $text)) {
-        send_message($chat_id, "$text 🚀\nМатеріал уроку (скоро заповнимо)", get_main_keyboard());
+        send_message($chat_id, "$text 🚀\n\nТут буде матеріал уроку...", get_main_keyboard());
     } elseif ($text == 'Бонуси 🎁') {
-        send_message($chat_id, "🎁 Бонуси скоро з’являться!", get_main_keyboard());
+        send_message($chat_id, "🎁 Бонуси та додаткові матеріали...\nСкоро тут з'явиться контент!", get_main_keyboard());
     } elseif ($text == 'Книга 📕') {
-        send_message($chat_id, "📖 Книга / посібник (скоро)", get_main_keyboard());
+        send_message($chat_id, "📖 Посібник з ПДР та навчання...\nСкоро додамо!", get_main_keyboard());
     } else {
-        send_message($chat_id, "Обери пункт меню 👇", get_main_keyboard());
+        send_message($chat_id, "👇 Обери пункт з меню", get_main_keyboard());
     }
-
     exit;
 }
 
-// Inline callback
+// ================== CALLBACK ==================
 if (isset($update['callback_query'])) {
     $call = $update['callback_query'];
     $call_id = $call['id'];
     $from_id = $call['from']['id'];
-    $data    = $call['data'] ?? '';
+    $data = $call['data'] ?? '';
 
     if (strpos($data, 'reply_') === 0) {
         if ($from_id != $curator_id) {
             answer_callback_query($call_id, "⛔ Доступ заборонено");
             exit;
         }
+
         $user_id = (int) substr($data, 6);
         $curator_reply_to[$curator_id] = $user_id;
         save_data();
-        answer_callback_query($call_id, "✅ Режим відповіді активовано");
+
+        file_put_contents(__DIR__ . '/debug_reply.log', date('Y-m-d H:i:s') . " | Активовано режим для учня $user_id\n", FILE_APPEND);
+
+        answer_callback_query($call_id, "✅ Активовано відповідь учню");
         send_message($curator_id,
-            "<b>Пишеш учню (ID: $user_id)</b>\nНадсилай повідомлення.\nЗавершити: /stop",
+            "<b>Ти пишеш учню (ID: $user_id)</b>\n\nНадсилай повідомлення — вони підуть йому.\n<i>Кнопка завжди активна. Завершити: /stop</i>",
             get_curator_keyboard($user_id),
             'HTML'
         );
@@ -416,8 +447,7 @@ if (isset($update['callback_query'])) {
     }
 }
 
-// Пінг / перевірка
+// Пінг
 if (empty($input)) {
-    http_response_code(200);
-    echo "Бот працює 🚗";
+    echo "Бот автошколи працює! 🚀";
 }
